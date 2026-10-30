@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Hand Push VR</title>
+  <style>
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#101820; font-family:Arial,sans-serif; color:white; }
+    #overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:2; pointer-events:none; }
+    #panel { pointer-events:auto; max-width:420px; margin:18px; padding:22px; border-radius:16px; background:rgba(8,18,28,.92); text-align:center; box-shadow:0 8px 32px #0008; }
+    h1 { margin:0 0 10px; font-size:25px; }
+    p { line-height:1.45; color:#d5e2ec; }
+    button { border:0; border-radius:10px; padding:14px 20px; background:#32c878; color:#06130b; font-size:17px; font-weight:bold; cursor:pointer; }
+    #hint { position:fixed; left:12px; bottom:12px; z-index:1; background:#0009; padding:9px 12px; border-radius:8px; font-size:13px; }
+    #error { color:#ffb6b6; }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div id="panel">
+      <h1>Hand Push VR</h1>
+      <p>Put on your Quest headset, open this page in the Meta Quest Browser, and press Start VR.</p>
+      <p>Use hand tracking. Push your palms against the floor, walls and blocks to move around, just like arm-swing locomotion.</p>
+      <button id="start">Start VR</button>
+      <p id="error"></p>
+    </div>
+  </div>
+  <div id="hint">Push your hands against surfaces to move • Hold the grip/palm close to a surface</div>
+
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87b9d8);
+    scene.fog = new THREE.Fog(0x87b9d8, 12, 45);
+
+    const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 100);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.xr.enabled = true;
+    renderer.xr.setReferenceSpaceType('local-floor');
+    document.body.appendChild(renderer.domElement);
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x536477, 2));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+    sun.position.set(5, 10, 4);
+    scene.add(sun);
+
+    const material = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
+    const floorMat = material(0x4c9857);
+    const wallMat = material(0x7b8792);
+    const blockMat = material(0xc58b54);
+
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(30, 0.3, 30), floorMat);
+    floor.position.set(0, -0.15, 0);
+    scene.add(floor);
+
+    // Arena walls
+    const walls = [];
+    function addWall(x, y, z, sx, sy, sz) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), wallMat);
+      mesh.position.set(x, y, z);
+      scene.add(mesh);
+      walls.push(mesh);
+      return mesh;
+    }
+    addWall(0, 2, -10, 20, 4, 0.5);
+    addWall(0, 2, 10, 20, 4, 0.5);
+    addWall(-10, 2, 0, 0.5, 4, 20);
+    addWall(10, 2, 0, 0.5, 4, 20);
+
+    // Large climbable blocks
+    const obstacles = [];
+    function addBlock(x, y, z, sx, sy, sz) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), blockMat);
+      mesh.position.set(x, y, z);
+      scene.add(mesh);
+      obstacles.push(mesh);
+    }
+    addBlock(-3, 0.75, -2, 2.4, 1.5, 2.4);
+    addBlock(3, 1.15, -4, 2.5, 2.3, 2.5);
+    addBlock(0, 2.0, 3, 3.5, 4, 2);
+    addBlock(-6, 1.5, 4, 2, 3, 2);
+
+    // A few visual landmarks
+    for (let i = 0; i < 12; i++) {
+      const tree = new THREE.Group();
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.13, .18, 1.2, 7), material(0x65452d));
+      trunk.position.y = .6;
+      const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(.8, 1), material(0x287b43));
+      crown.position.y = 1.65;
+      tree.add(trunk, crown);
+      const a = i / 12 * Math.PI * 2;
+      tree.position.set(Math.cos(a) * 8.2, 0, Math.sin(a) * 8.2);
+      scene.add(tree);
+    }
+
+    // XR hands. Joint positions are supplied by the headset's hand-tracking system.
+    const hands = [renderer.xr.getHand(0), renderer.xr.getHand(1)];
+    const handVisuals = [];
+    for (let i = 0; i < 2; i++) {
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(.095, 16, 12),
+        new THREE.MeshStandardMaterial({ color: i === 0 ? 0x32d5ff : 0xffb347 }));
+      scene.add(ball);
+      handVisuals.push(ball);
+      scene.add(hands[i]);
+    }
+
+    const player = new THREE.Group();
+    scene.add(player);
+    player.add(camera);
+    camera.position.set(0, 1.65, 0);
+    player.position.set(0, 0, 6);
+
+    const previousPalm = [null, null];
+    const palmNames = ['wrist', 'index-finger-metacarpal', 'pinky-finger-metacarpal', 'middle-finger-metacarpal'];
+    const tmp = new THREE.Vector3();
+    const box = new THREE.Box3();
+    const closest = new THREE.Vector3();
+
+    function getPalm(hand) {
+      const wrist = hand.joints['wrist'];
+      const index = hand.joints['index-finger-metacarpal'];
+      const pinky = hand.joints['pinky-finger-metacarpal'];
+      const middle = hand.joints['middle-finger-metacarpal'];
+      if (!wrist || !index || !pinky || !middle) return null;
+      if (!wrist.visible || !index.visible || !pinky.visible || !middle.visible) return null;
+      // Approximate centre of the palm from the tracked hand joints.
+      return new THREE.Vector3()
+        .add(wrist.position)
+        .add(index.position)
+        .add(pinky.position)
+        .add(middle.position)
+        .multiplyScalar(.25);
+    }
+
+    function isTouchingSurface(point) {
+      // Floor contact
+      if (point.y < 0.22 && point.y > -0.12) return true;
+
+      // Contact with arena walls
+      if (Math.abs(point.x) > 9.55 && Math.abs(point.x) < 10.35 &&
+          point.y > 0 && point.y < 4.1) return true;
+      if (Math.abs(point.z) > 9.55 && Math.abs(point.z) < 10.35 &&
+          point.y > 0 && point.y < 4.1) return true;
+
+      // Contact with blocks
+      for (const obj of obstacles) {
+        box.setFromObject(obj);
+        box.expandByScalar(.13);
+        closest.copy(point).clamp(box.min, box.max);
+        if (closest.distanceToSquared(point) < .035) return true;
+      }
+      return false;
+    }
+
+    let lastTime = 0;
+    renderer.setAnimationLoop((time) => {
+      const dt = Math.min((time - lastTime) / 1000 || 0, .04);
+      lastTime = time;
+
+      for (let i = 0; i < 2; i++) {
+        const palm = getPalm(hands[i]);
+        if (palm) {
+          // Joint positions are in world space because the hand objects are in the scene.
+          handVisuals[i].visible = true;
+          handVisuals[i].position.copy(palm);
+          if (previousPalm[i] && isTouchingSurface(palm)) {
+            const handDelta = palm.clone().sub(previousPalm[i]);
+            // Moving a planted hand forward pushes the body in the opposite direction.
+            const push = handDelta.multiplyScalar(-1.65);
+            push.y = 0;
+            const maxStep = .12;
+            if (push.length() > maxStep) push.setLength(maxStep);
+            player.position.add(push);
+          }
+          previousPalm[i] = palm.clone();
+        } else {
+          handVisuals[i].visible = false;
+          previousPalm[i] = null;
+        }
+      }
+
+      // Keep the player inside the play area.
+      player.position.x = THREE.MathUtils.clamp(player.position.x, -8.8, 8.8);
+      player.position.z = THREE.MathUtils.clamp(player.position.z, -8.8, 8.8);
+      renderer.render(scene, camera);
+    });
+
+    document.getElementById('start').addEventListener('click', async () => {
+      const error = document.getElementById('error');
+      try {
+        if (!navigator.xr) throw new Error('WebXR is not available. Open this page in the Meta Quest Browser over HTTPS.');
+        const supported = await navigator.xr.isSessionSupported('immersive-vr');
+        if (!supported) throw new Error('Immersive VR is not supported by this browser.');
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          requiredFeatures: ['local-floor'],
+          optionalFeatures: ['hand-tracking', 'bounded-floor']
+        });
+        await renderer.xr.setSession(session);
+        document.getElementById('overlay').style.display = 'none';
+        session.addEventListener('end', () => {
+          document.getElementById('overlay').style.display = 'flex';
+        });
+      } catch (e) {
+        error.textContent = e.message || String(e);
+      }
+    });
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>
